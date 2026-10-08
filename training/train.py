@@ -1,19 +1,18 @@
 ﻿"""
 CharanAI - Model Training Pipeline
 ==================================
-Trains the CharanLM model on processed token sequences using PyTorch.
+Trains the CharanGPT model on processed token sequences using PyTorch.
 Includes:
  - Device auto-detection (CUDA / CPU)
  - Dataset loading with sliding causal context window
- - Cross-Entropy Loss computation
- - AdamW optimizer step
+ - Cross-Entropy Loss computation with integrated forward pass
+ - AdamW optimizer step with weight decay
  - Loss progression tracking and model checkpointing
 """
 import os
 import sys
 import time
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -22,20 +21,26 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from model.charan_lm import CharanLM
+from model.charan_gpt import CharanGPT, CharanGPTConfig
 from training.dataset import LanguageModelDataset
 from training.build_dataset import build_dataset, PROCESSED_DATA_PATH, TOKENIZER_PATH
 from tokenizer.bpe_tokenizer import BPETokenizer
 
 # ==============================================================================
-# Hyperparameters & Configuration
+# Configuration
 # ==============================================================================
-VOCAB_SIZE = 150
-MAX_SEQUENCE_LENGTH = 32
-EMBEDDING_DIM = 64
-NUM_HEADS = 4
-HIDDEN_DIM = 256
-NUM_LAYERS = 2
+CONFIG = CharanGPTConfig(
+    vocab_size=150,
+    max_sequence_length=32,
+    embedding_dim=64,
+    num_heads=4,
+    hidden_dim=256,
+    num_layers=2,
+    dropout=0.05,
+    weight_tying=True,
+    norm_type="layernorm",
+    activation="gelu"
+)
 
 LEARNING_RATE = 0.003
 EPOCHS = 60
@@ -51,9 +56,9 @@ def train():
 
     # 1. Device Selection
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("=" * 55)
-    print("CharanAI — Training Pipeline")
-    print("=" * 55)
+    print("=" * 60)
+    print("CharanAI — CharanGPT Training Pipeline")
+    print("=" * 60)
     print(f"Device: {device}")
 
     # 2. Check/Build Processed Dataset
@@ -65,24 +70,16 @@ def train():
     print(f"Loaded token dataset: {len(token_ids)} tokens.")
 
     # 3. Create Dataset & DataLoader
-    dataset = LanguageModelDataset(token_ids, sequence_length=MAX_SEQUENCE_LENGTH)
+    dataset = LanguageModelDataset(token_ids, sequence_length=CONFIG.max_sequence_length)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
     print(f"Dataset samples: {len(dataset)} | Batches per epoch: {len(dataloader)}")
 
     # 4. Instantiate Model
-    model = CharanLM(
-        vocab_size=VOCAB_SIZE,
-        max_sequence_length=MAX_SEQUENCE_LENGTH,
-        embedding_dim=EMBEDDING_DIM,
-        num_heads=NUM_HEADS,
-        hidden_dim=HIDDEN_DIM,
-        num_layers=NUM_LAYERS
-    ).to(device)
+    model = CharanGPT(CONFIG).to(device)
+    print(f"Total Trainable Parameters: {model.count_parameters():,}")
+    print(f"Non-Embedding Parameters:  {model.count_parameters(non_embedding=True):,}")
 
-    print(f"Model parameters: {model.count_parameters():,}")
-
-    # 5. Loss Function and Optimizer
-    loss_fn = nn.CrossEntropyLoss()
+    # 5. Optimizer
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
 
     # 6. Training Loop
@@ -99,11 +96,8 @@ def train():
 
             optimizer.zero_grad()
 
-            # Forward pass: (B, T) -> (B, T, vocab_size)
-            logits = model(input_ids)
-
-            # Reshape for Cross-Entropy Loss: (B*T, vocab_size) vs (B*T)
-            loss = loss_fn(logits.view(-1, VOCAB_SIZE), target_ids.view(-1))
+            # Forward pass with built-in loss computation
+            logits, loss = model(input_ids, targets=target_ids)
 
             # Backward pass & weight update
             loss.backward()
@@ -119,25 +113,14 @@ def train():
     elapsed = time.time() - start_time
     print(f"\nTraining completed in {elapsed:.2f} seconds.")
 
-    # 7. Save Checkpoint
-    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "config": {
-                "vocab_size": VOCAB_SIZE,
-                "max_sequence_length": MAX_SEQUENCE_LENGTH,
-                "embedding_dim": EMBEDDING_DIM,
-                "num_heads": NUM_HEADS,
-                "hidden_dim": HIDDEN_DIM,
-                "num_layers": NUM_LAYERS,
-            },
-            "final_loss": avg_loss,
-        },
-        CHECKPOINT_PATH
+    # 7. Save Checkpoint using CharanGPT API
+    model.save_checkpoint(
+        CHECKPOINT_PATH,
+        optimizer=optimizer,
+        epoch=EPOCHS,
+        loss=avg_loss
     )
-    print(f"Checkpoint successfully saved to: {CHECKPOINT_PATH}")
-    print("=" * 55)
+    print("=" * 60)
 
 
 if __name__ == "__main__":

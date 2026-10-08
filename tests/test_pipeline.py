@@ -9,7 +9,7 @@ Automated verification tests for:
  5. Self-Attention & Multi-Head Attention (Shapes & Causal Masking)
  6. FeedForward Networks (GELU, ReLU, SwiGLU)
  7. Transformer Blocks (Pre-LN, Post-LN, RMSNorm, LayerNorm & Gradient Highway)
- 8. CharanLM Model (Forward pass & Parameter counts)
+ 8. CharanGPT Architecture (Weight Tying, Checkpointing, Parameter Counting)
  9. End-to-End Generation Pipeline
 """
 import os
@@ -33,7 +33,7 @@ from model.attention import SelfAttention
 from model.multi_head_attention import MultiHeadAttention
 from model.feed_forward import FeedForward, SwiGLU
 from model.transformer_block import TransformerBlock, RMSNorm
-from model.charan_lm import CharanLM
+from model.charan_gpt import CharanGPT, CharanGPTConfig
 from inference.generate import generate
 
 
@@ -68,7 +68,6 @@ class TestTokenizers(unittest.TestCase):
         dec = word_tok.decode(enc)
         self.assertEqual(sentence, dec)
 
-        # Unseen word triggers UNK
         unseen_enc = word_tok.encode("UnseenWord123")
         self.assertEqual(unseen_enc, [word_tok.token_to_id["<UNK>"]])
 
@@ -175,21 +174,53 @@ class TestModelComponents(unittest.TestCase):
         self.assertIsNotNone(x.grad)
         self.assertGreater(x.grad.norm().item(), 0.0)
 
-    def test_charan_lm_forward(self):
-        vocab_size = 150
-        max_seq_len = 32
-        model = CharanLM(
-            vocab_size=vocab_size,
-            max_sequence_length=max_seq_len,
-            embedding_dim=64,
-            num_heads=4,
-            hidden_dim=256,
-            num_layers=2
+
+class TestCharanGPT(unittest.TestCase):
+    def test_charan_gpt_weight_tying_and_forward(self):
+        cfg = CharanGPTConfig(
+            vocab_size=100,
+            max_sequence_length=16,
+            embedding_dim=32,
+            num_heads=2,
+            hidden_dim=128,
+            num_layers=2,
+            weight_tying=True
         )
-        input_ids = torch.randint(0, vocab_size, (2, 16))
-        logits = model(input_ids)
-        self.assertEqual(logits.shape, (2, 16, vocab_size))
-        self.assertGreater(model.count_parameters(), 10000)
+        model = CharanGPT(cfg)
+
+        # Verify weight tying pointer equality
+        self.assertIs(
+            model.lm_head.weight,
+            model.embeddings.token_embedding.embedding.weight
+        )
+
+        x = torch.randint(0, 100, (2, 8))
+        y = torch.randint(0, 100, (2, 8))
+        logits, loss = model(x, targets=y)
+
+        self.assertEqual(logits.shape, (2, 8, 100))
+        self.assertIsNotNone(loss)
+        self.assertGreater(loss.item(), 0.0)
+
+    def test_charan_gpt_checkpoint_save_and_load(self):
+        cfg = CharanGPTConfig(
+            vocab_size=80,
+            max_sequence_length=16,
+            embedding_dim=32,
+            num_heads=2,
+            hidden_dim=64,
+            num_layers=1
+        )
+        model = CharanGPT(cfg)
+        test_ckpt = os.path.join(PROJECT_ROOT, "tests", "test_gpt.pth")
+        model.save_checkpoint(test_ckpt, epoch=1, loss=0.5)
+
+        loaded_model, ckpt = CharanGPT.from_checkpoint(test_ckpt)
+        self.assertEqual(loaded_model.config.vocab_size, 80)
+        self.assertEqual(ckpt["epoch"], 1)
+
+        if os.path.exists(test_ckpt):
+            os.remove(test_ckpt)
 
 
 class TestEndToEndGeneration(unittest.TestCase):
