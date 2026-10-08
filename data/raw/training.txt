@@ -1,0 +1,15 @@
+Hello my name is Charan.
+I am building my own language model.
+Artificial intelligence can automate many tasks.
+Language models learn patterns from text.
+A transformer uses attention to understand relationships between tokens.
+Machine learning learns useful patterns from data.
+Python is a powerful programming language.
+AI agents can plan and execute tasks.
+A computer can process information very quickly.
+Software systems can automate repetitive work.
+Deep learning uses neural networks to learn representations.
+Natural language processing allows computers to work with human language.
+The future of artificial intelligence depends on useful and reliable systems.
+I am learning how to build an AI system from scratch.
+My goal is to create my own intelligent assistant.
